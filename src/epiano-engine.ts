@@ -108,8 +108,9 @@ export class EPianoEngine {
   private volume = 0.2
   private muff = 160
   private muffvel = 1.25
-  private sizevel = 0
   private velsens = 1
+  private poly = 32
+  private fine = 0
   private size = 0
   private overdriveAmount = 0
   private random = 0
