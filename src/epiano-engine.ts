@@ -413,6 +413,10 @@ export class EPianoEngine {
     }
   }
 
+  get currentTime(): number {
+    return this.ctx?.currentTime ?? 0
+  }
+
   resume() {
     if (this.ctx?.state === 'suspended') {
       this.ctx.resume()

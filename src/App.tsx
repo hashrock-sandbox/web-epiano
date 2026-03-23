@@ -110,6 +110,8 @@ function App() {
   const nextIdRef = useRef(1)
   const intervalRef = useRef<number | null>(null)
   const stepRef = useRef(0)
+  const nextStepTimeRef = useRef(0)  // AudioContext time of next step
+  const playStartTimeRef = useRef(0)
   const prevSoundingRef = useRef<Set<number>>(new Set())
   const notesRef = useRef(notes)
   notesRef.current = notes
@@ -185,6 +187,20 @@ function App() {
     return result
   }, [])
 
+  const processStep = useCallback((engine: EPianoEngine, step: number) => {
+    const curr = getSoundingPitches(step)
+    const starting = getStartingPitches(step)
+    const prev = prevSoundingRef.current
+
+    for (const p of prev) {
+      if (!curr.has(p) || starting.has(p)) engine.noteOff(p)
+    }
+    for (const p of curr) {
+      if (!prev.has(p) || starting.has(p)) engine.noteOn(p, 80)
+    }
+    prevSoundingRef.current = curr
+  }, [getSoundingPitches, getStartingPitches])
+
   const stopPlayback = useCallback(() => {
     if (intervalRef.current !== null) {
       clearInterval(intervalRef.current)
@@ -206,31 +222,31 @@ function App() {
     setCurrentStep(0)
     prevSoundingRef.current.clear()
 
-    const stepMs = (60 / bpm / 4) * 1000
+    const stepDuration = 60 / bpm / 4  // seconds per 16th note
 
-    const curr = getSoundingPitches(0)
-    const starting = getStartingPitches(0)
-    for (const p of starting) engine.noteOn(p, 80)
-    prevSoundingRef.current = curr
+    // Use AudioContext.currentTime as the clock source
+    const now = engine.currentTime
+    playStartTimeRef.current = now
+    nextStepTimeRef.current = now  // first step plays immediately
 
+    // Process first step
+    processStep(engine, 0)
+
+    // Lookahead scheduler: poll at 25ms, fire steps based on audio clock
     intervalRef.current = window.setInterval(() => {
-      stepRef.current = (stepRef.current + 1) % totalStepsRef.current
-      const step = stepRef.current
-      setCurrentStep(step)
+      const audioNow = engine.currentTime
 
-      const curr = getSoundingPitches(step)
-      const starting = getStartingPitches(step)
-      const prev = prevSoundingRef.current
+      // Process all steps that should have fired by now
+      while (nextStepTimeRef.current <= audioNow) {
+        nextStepTimeRef.current += stepDuration
 
-      for (const p of prev) {
-        if (!curr.has(p) || starting.has(p)) engine.noteOff(p)
+        stepRef.current = (stepRef.current + 1) % totalStepsRef.current
+        const step = stepRef.current
+        setCurrentStep(step)
+        processStep(engine, step)
       }
-      for (const p of curr) {
-        if (!prev.has(p) || starting.has(p)) engine.noteOn(p, 80)
-      }
-      prevSoundingRef.current = curr
-    }, stepMs)
-  }, [bpm, getEngine, getSoundingPitches, getStartingPitches])
+    }, 25)
+  }, [bpm, getEngine, processStep])
 
   const togglePlayback = useCallback(() => {
     if (isPlaying) stopPlayback()
@@ -443,7 +459,7 @@ function App() {
               </div>
             </div>
             <div className="transport-group">
-              <label>Length</label>
+              <label>Grid</label>
               <div className="len-btns">
                 {NOTE_LENGTH_OPTIONS.map(opt => (
                   <button
@@ -477,14 +493,18 @@ function App() {
             <div className="roll-header">
               <div className="corner-cell" />
               <div className="beat-markers-scroll" ref={beatMarkersRef}>
-                {Array.from({ length: totalSteps }, (_, i) => (
-                  <div
-                    key={i}
-                    className={`beat-marker ${i % STEPS_PER_BAR === 0 ? 'bar' : i % 4 === 0 ? 'beat' : ''}`}
-                  >
-                    {i % STEPS_PER_BAR === 0 ? `${Math.floor(i / STEPS_PER_BAR) + 1}` : i % 4 === 0 ? '·' : ''}
-                  </div>
-                ))}
+                {Array.from({ length: totalSteps }, (_, i) => {
+                  const isBar = i % STEPS_PER_BAR === 0
+                  const isGrid = !isBar && i % selectedLength === 0
+                  return (
+                    <div
+                      key={i}
+                      className={`beat-marker ${isBar ? 'bar' : isGrid ? 'beat' : ''}`}
+                    >
+                      {isBar ? `${Math.floor(i / STEPS_PER_BAR) + 1}` : isGrid ? '·' : ''}
+                    </div>
+                  )
+                })}
               </div>
             </div>
 
@@ -508,7 +528,7 @@ function App() {
                           className={
                             'grid-cell' +
                             (col === currentStep ? ' playhead' : '') +
-                            (col % STEPS_PER_BAR === 0 ? ' bar-line' : col % 4 === 0 ? ' beat-line' : '')
+                            (col % STEPS_PER_BAR === 0 ? ' bar-line' : col % selectedLength === 0 ? ' beat-line' : '')
                           }
                           onPointerDown={e => handleCellPointerDown(col, noteStep, e)}
                         />
