@@ -14,6 +14,8 @@ interface Voice {
   end: number
   loop: number
   env: number
+  envTarget: number
+  envAttack: number  // 0→1 ramp to avoid click
   dec: number
   f0: number
   f1: number
@@ -34,7 +36,8 @@ interface KeyGroup {
 function createVoice(): Voice {
   return {
     delta: 0, frac: 0, pos: 0, end: 0, loop: 0,
-    env: 0, dec: 0.99, f0: 0, f1: 0, ff: 0,
+    env: 0, envTarget: 0, envAttack: 1,
+    dec: 0.99, f0: 0, f1: 0, ff: 0,
     outl: 0, outr: 0, note: 0,
   }
 }
@@ -117,6 +120,7 @@ export class EPianoEngine {
   private size = 0
   private overdriveAmount = 0
   private random = 0
+  private attackInc = 1.0 / (0.003 * 44100)  // ~3ms ramp
 
   constructor() {
     this.waves = new Int16Array(epianoData.length)
@@ -211,10 +215,11 @@ export class EPianoEngine {
     this.ctx = new AudioContext()
     this.Fs = this.ctx.sampleRate
     this.iFs = 1.0 / this.Fs
+    this.attackInc = 1.0 / (0.003 * this.Fs)  // ~3ms attack ramp
     this.updateInternalParams()
 
     // Use ScriptProcessorNode for direct DSP
-    const bufferSize = 1024
+    const bufferSize = 4096
     this.scriptNode = this.ctx.createScriptProcessor(bufferSize, 0, 2)
     this.scriptNode.onaudioprocess = (e) => this.process(e)
     this.scriptNode.connect(this.ctx.destination)
@@ -239,10 +244,16 @@ export class EPianoEngine {
 
         if (V.pos > V.end) V.pos -= V.loop
 
+        // Attack ramp (fade in ~3ms to avoid click)
+        if (V.envAttack < 1.0) {
+          V.envAttack += this.attackInc
+          if (V.envAttack > 1.0) V.envAttack = 1.0
+        }
+
         // Linear interpolation between samples
         const i = this.waves[V.pos] +
           ((V.frac * (this.waves[V.pos + 1] - this.waves[V.pos])) >> 16)
-        let x = V.env * i / 32768.0
+        let x = V.env * V.envAttack * i / 32768.0
 
         // Envelope decay
         V.env = V.env * V.dec
@@ -307,6 +318,7 @@ export class EPianoEngine {
         vl = this.activevoices
         this.activevoices++
         this.voice[vl].f0 = this.voice[vl].f1 = 0
+        this.voice[vl].envAttack = 0
       } else {
         // Steal quietest voice
         let minEnv = 99
@@ -316,6 +328,8 @@ export class EPianoEngine {
             vl = v
           }
         }
+        this.voice[vl].f0 = this.voice[vl].f1 = 0
+        this.voice[vl].envAttack = 0
       }
 
       const k2 = (midiApprox - 60) * (midiApprox - 60)
@@ -374,9 +388,12 @@ export class EPianoEngine {
         if (this.voice[v].note === note) {
           if (this.sustain === 0) {
             const m = this.toMidi(note)
-            this.voice[v].dec = Math.exp(
+            const release = Math.exp(
               -this.iFs * Math.exp(6.0 + 0.01 * m - 5.0 * this.params.envelopeRelease)
             )
+            // Minimum ~5ms fade-out to avoid click noise
+            const minRelease = Math.exp(-this.iFs / 0.005)
+            this.voice[v].dec = Math.min(release, minRelease)
           } else {
             this.voice[v].note = SUSTAIN
           }

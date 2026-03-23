@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { EPianoEngine, DEFAULT_PARAMS, PARAM_DEFS, type EPianoParams, REF_STEP, STEPS_PER_OCTAVE } from './epiano-engine'
 import './App.css'
 
+// --- 31-EDO definitions ---
 const NOTE_NAMES_31 = [
   'C', '^C', 'C#', 'Db', 'vD',
   'D', '^D', 'D#', 'Eb', 'vE',
@@ -22,12 +23,61 @@ const KEY_TYPES_31: ('natural' | 'sharp' | 'micro')[] = [
   'natural', 'micro', 'sharp',
 ]
 
-const STEPS_PER_BAR = 16
-const NOTE_LOW = REF_STEP - STEPS_PER_OCTAVE
-const NOTE_HIGH = REF_STEP + STEPS_PER_OCTAVE - 1
+// --- 12-EDO mapped to 31-EDO steps (meantone) ---
+const EDO12_OFFSETS = [0, 3, 5, 8, 10, 13, 16, 18, 21, 23, 26, 28]
+const EDO12_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+const EDO12_TYPES: ('natural' | 'sharp')[] = [
+  'natural', 'sharp', 'natural', 'sharp', 'natural',
+  'natural', 'sharp', 'natural', 'sharp', 'natural', 'sharp', 'natural',
+]
 
-const NOTE_RANGE: number[] = []
-for (let n = NOTE_HIGH; n >= NOTE_LOW; n--) NOTE_RANGE.push(n)
+type EdoMode = 12 | 31
+
+const NUM_OCTAVES = 6
+const OCT_LOW = REF_STEP - 3 * STEPS_PER_OCTAVE   // C1
+const OCT_HIGH_31 = REF_STEP + 3 * STEPS_PER_OCTAVE - 1 // B6
+
+function buildNoteRange(mode: EdoMode): number[] {
+  const range: number[] = []
+  if (mode === 12) {
+    for (let oct = NUM_OCTAVES - 1; oct >= 0; oct--) {
+      const octBase = OCT_LOW + oct * STEPS_PER_OCTAVE
+      for (let i = EDO12_OFFSETS.length - 1; i >= 0; i--) {
+        range.push(octBase + EDO12_OFFSETS[i])
+      }
+    }
+  } else {
+    for (let n = OCT_HIGH_31; n >= OCT_LOW; n--) {
+      range.push(n)
+    }
+  }
+  return range
+}
+
+function getNoteName(step: number, mode: EdoMode): string {
+  const octave = Math.floor(step / STEPS_PER_OCTAVE) - 1
+  if (mode === 12) {
+    const offset = ((step % STEPS_PER_OCTAVE) + STEPS_PER_OCTAVE) % STEPS_PER_OCTAVE
+    const idx = EDO12_OFFSETS.indexOf(offset)
+    if (idx >= 0) return `${EDO12_NAMES[idx]}${octave}`
+    return `?${octave}`
+  }
+  const degree = ((step % STEPS_PER_OCTAVE) + STEPS_PER_OCTAVE) % STEPS_PER_OCTAVE
+  return `${NOTE_NAMES_31[degree]}${octave}`
+}
+
+function getNoteType(step: number, mode: EdoMode): 'natural' | 'sharp' | 'micro' {
+  if (mode === 12) {
+    const offset = ((step % STEPS_PER_OCTAVE) + STEPS_PER_OCTAVE) % STEPS_PER_OCTAVE
+    const idx = EDO12_OFFSETS.indexOf(offset)
+    if (idx >= 0) return EDO12_TYPES[idx]
+    return 'micro'
+  }
+  const degree = ((step % STEPS_PER_OCTAVE) + STEPS_PER_OCTAVE) % STEPS_PER_OCTAVE
+  return KEY_TYPES_31[degree]
+}
+
+const STEPS_PER_BAR = 16
 
 const NOTE_LENGTH_OPTIONS = [
   { label: '1/16', steps: 1 },
@@ -44,17 +94,6 @@ interface SeqNote {
   len: number
 }
 
-function getNoteName(step: number): string {
-  const degree = ((step % STEPS_PER_OCTAVE) + STEPS_PER_OCTAVE) % STEPS_PER_OCTAVE
-  const octave = Math.floor(step / STEPS_PER_OCTAVE) - 1
-  return `${NOTE_NAMES_31[degree]}${octave}`
-}
-
-function getNoteType(step: number): 'natural' | 'sharp' | 'micro' {
-  const degree = ((step % STEPS_PER_OCTAVE) + STEPS_PER_OCTAVE) % STEPS_PER_OCTAVE
-  return KEY_TYPES_31[degree]
-}
-
 function App() {
   const engineRef = useRef<EPianoEngine | null>(null)
   const [params, setParams] = useState<EPianoParams>({ ...DEFAULT_PARAMS })
@@ -62,8 +101,11 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentStep, setCurrentStep] = useState(-1)
   const [bpm, setBpm] = useState(120)
-  const [numBars, setNumBars] = useState(4)
+  const [numBars, setNumBars] = useState(2)
   const [selectedLength, setSelectedLength] = useState(4)
+  const [edoMode, setEdoMode] = useState<EdoMode>(12)
+
+  const noteRange = useMemo(() => buildNoteRange(edoMode), [edoMode])
 
   const nextIdRef = useRef(1)
   const intervalRef = useRef<number | null>(null)
@@ -74,14 +116,20 @@ function App() {
   const labelsRef = useRef<HTMLDivElement>(null)
   const gridScrollRef = useRef<HTMLDivElement>(null)
   const beatMarkersRef = useRef<HTMLDivElement>(null)
+  const noteRangeRef = useRef(noteRange)
+  noteRangeRef.current = noteRange
 
   const dragRef = useRef<{
     noteId: number
     row: number
     startCol: number
     cellWidth: number
+    cellHeight: number
     gridLeft: number
-    scrollLeft: number
+    gridTop: number
+    startX: number
+    startY: number
+    dragStarted: boolean
   } | null>(null)
 
   const totalSteps = numBars * STEPS_PER_BAR
@@ -103,7 +151,6 @@ function App() {
 
   // --- Note lookup helpers ---
   const findNoteAt = useCallback((col: number, row: number): SeqNote | undefined => {
-    // Search in reverse so latest note is found first
     for (let i = notes.length - 1; i >= 0; i--) {
       const n = notes[i]
       if (n.row === row && col >= n.col && col < n.col + n.len) return n
@@ -111,7 +158,6 @@ function App() {
     return undefined
   }, [notes])
 
-  // Notes indexed by row for rendering
   const notesByRow = useMemo(() => {
     const map = new Map<number, SeqNote[]>()
     for (const note of notes) {
@@ -162,7 +208,6 @@ function App() {
 
     const stepMs = (60 / bpm / 4) * 1000
 
-    // Play first step
     const curr = getSoundingPitches(0)
     const starting = getStartingPitches(0)
     for (const p of starting) engine.noteOn(p, 80)
@@ -177,11 +222,9 @@ function App() {
       const starting = getStartingPitches(step)
       const prev = prevSoundingRef.current
 
-      // noteOff: stopped or retriggering
       for (const p of prev) {
         if (!curr.has(p) || starting.has(p)) engine.noteOff(p)
       }
-      // noteOn: newly sounding or retriggering
       for (const p of curr) {
         if (!prev.has(p) || starting.has(p)) engine.noteOn(p, 80)
       }
@@ -226,12 +269,10 @@ function App() {
 
     const existing = findNoteAt(col, row)
     if (existing) {
-      // Delete existing note
       setNotes(prev => prev.filter(n => n.id !== existing.id))
       return
     }
 
-    // Create new note
     const engine = getEngine()
     engine.resume()
     engine.noteOn(row, 80)
@@ -241,20 +282,22 @@ function App() {
     const newNote: SeqNote = { id, col, row, len }
     setNotes(prev => [...prev, newNote])
 
-    // Start drag for length adjustment
     const gridEl = gridScrollRef.current
     if (gridEl) {
       const cell = e.currentTarget as HTMLElement
       const cellRect = cell.getBoundingClientRect()
-      const cellWidth = cellRect.width
       const gridRect = gridEl.getBoundingClientRect()
       dragRef.current = {
         noteId: id,
         row,
         startCol: col,
-        cellWidth,
+        cellWidth: cellRect.width,
+        cellHeight: cellRect.height,
         gridLeft: gridRect.left,
-        scrollLeft: gridEl.scrollLeft,
+        gridTop: gridRect.top,
+        startX: e.clientX,
+        startY: e.clientY,
+        dragStarted: false,
       }
     }
   }, [findNoteAt, getEngine, selectedLength, totalSteps])
@@ -266,12 +309,37 @@ function App() {
     const gridEl = gridScrollRef.current
     if (!gridEl) return
 
+    // 4px threshold before drag starts
+    if (!drag.dragStarted) {
+      const dx = e.clientX - drag.startX
+      const dy = e.clientY - drag.startY
+      if (dx * dx + dy * dy < 16) return
+      drag.dragStarted = true
+    }
+
+    // Horizontal: adjust length
     const x = e.clientX - drag.gridLeft + gridEl.scrollLeft
     const col = Math.floor(x / drag.cellWidth)
     const newLen = Math.max(1, Math.min(col - drag.startCol + 1, totalStepsRef.current - drag.startCol))
 
+    // Vertical: adjust pitch
+    const y = e.clientY - drag.gridTop + gridEl.scrollTop
+    const rowIdx = Math.floor(y / drag.cellHeight)
+    const range = noteRangeRef.current
+    const clampedIdx = Math.max(0, Math.min(rowIdx, range.length - 1))
+    const newRow = range[clampedIdx]
+
+    if (newRow !== drag.row) {
+      const engine = engineRef.current
+      if (engine) {
+        engine.noteOff(drag.row)
+        engine.noteOn(newRow, 80)
+      }
+      drag.row = newRow
+    }
+
     setNotes(prev => prev.map(n =>
-      n.id === drag.noteId ? { ...n, len: newLen } : n
+      n.id === drag.noteId ? { ...n, len: newLen, row: newRow } : n
     ))
   }, [])
 
@@ -321,7 +389,7 @@ function App() {
 
   return (
     <div className="piano-app">
-      <h1>Web ePiano <span className="edo-badge">31-EDO</span></h1>
+      <h1>Web ePiano <span className="edo-badge">{edoMode}-EDO</span></h1>
       <p className="subtitle">ピアノロールシーケンサー（スペースキーで再生/停止）</p>
 
       <div className="main-layout">
@@ -388,6 +456,19 @@ function App() {
                 ))}
               </div>
             </div>
+            <div className="transport-group">
+              <label>Scale</label>
+              <div className="bar-btns">
+                <button
+                  className={`bar-btn ${edoMode === 12 ? 'active' : ''}`}
+                  onClick={() => setEdoMode(12)}
+                >12</button>
+                <button
+                  className={`bar-btn ${edoMode === 31 ? 'active' : ''}`}
+                  onClick={() => setEdoMode(31)}
+                >31</button>
+              </div>
+            </div>
             <button className="transport-btn clear-btn" onClick={clearAll}>Clear</button>
           </div>
 
@@ -409,19 +490,18 @@ function App() {
 
             <div className="roll-body">
               <div className="note-labels" ref={labelsRef}>
-                {NOTE_RANGE.map(n => (
-                  <div key={n} className={`note-label note-label--${getNoteType(n)}`}>
-                    {getNoteName(n)}
+                {noteRange.map(n => (
+                  <div key={n} className={`note-label note-label--${getNoteType(n, edoMode)}`}>
+                    {getNoteName(n, edoMode)}
                   </div>
                 ))}
               </div>
 
               <div className="grid-scroll" ref={gridScrollRef} onScroll={handleGridScroll}>
-                {NOTE_RANGE.map(noteStep => {
+                {noteRange.map(noteStep => {
                   const rowNotes = notesByRow.get(noteStep) || []
                   return (
-                    <div key={noteStep} className={`grid-row grid-row--${getNoteType(noteStep)}`}>
-                      {/* Background cells (interaction layer) */}
+                    <div key={noteStep} className={`grid-row grid-row--${getNoteType(noteStep, edoMode)}`}>
                       {Array.from({ length: totalSteps }, (_, col) => (
                         <div
                           key={col}
@@ -433,7 +513,6 @@ function App() {
                           onPointerDown={e => handleCellPointerDown(col, noteStep, e)}
                         />
                       ))}
-                      {/* Note blocks (visual overlay) */}
                       {rowNotes.map(note => (
                         <div
                           key={note.id}
