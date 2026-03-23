@@ -1,3 +1,10 @@
+:root {
+  --cell-w: 24px;
+  --cell-h: 14px;
+  --label-w: 54px;
+  --header-h: 20px;
+}
+
 .piano-app {
   display: flex;
   flex-direction: column;
@@ -41,6 +48,7 @@
   padding: 20px;
   width: 260px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  flex-shrink: 0;
 }
 
 .params-panel h2 {
@@ -98,123 +106,271 @@
   font-family: ui-monospace, monospace;
 }
 
-/* Piano */
-.piano {
+/* Sequencer */
+.sequencer {
   background: #1a1a2e;
   border-radius: 12px;
-  padding: 24px 12px 12px;
+  padding: 16px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-  overflow-x: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-/* 31-EDO Keyboard */
-.keys-container-31 {
+/* Transport */
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.transport-btn {
+  background: #2e303a;
+  color: #e0e0e0;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.transport-btn:hover {
+  background: #3e404a;
+}
+
+.clear-btn {
+  margin-left: auto;
+  color: #f87171;
+}
+
+.clear-btn:hover {
+  background: #4a2020;
+}
+
+.transport-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.transport-group label {
+  font-size: 12px;
+  color: #888;
+}
+
+.bpm-input {
+  width: 56px;
+  background: #2e303a;
+  color: #e0e0e0;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 13px;
+  text-align: center;
+  font-family: ui-monospace, monospace;
+}
+
+.bar-btns {
   display: flex;
   gap: 2px;
 }
 
-.key-31 {
-  width: 34px;
-  min-width: 34px;
-  height: 180px;
-  border-radius: 0 0 5px 5px;
+.bar-btn {
+  background: #2e303a;
+  color: #aaa;
+  border: none;
+  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
+}
+
+.bar-btn.active {
+  background: #c084fc;
+  color: #1a1a2e;
+}
+
+/* Piano Roll */
+.roll-wrapper {
   display: flex;
   flex-direction: column;
+  border-radius: 6px;
+  border: 1px solid #2e303a;
+  overflow: hidden;
+}
+
+/* Header: corner + beat markers */
+.roll-header {
+  display: flex;
+  flex-shrink: 0;
+  background: #14142a;
+  border-bottom: 1px solid #2e303a;
+}
+
+.corner-cell {
+  width: var(--label-w);
+  min-width: var(--label-w);
+  height: var(--header-h);
+  background: #14142a;
+}
+
+.beat-markers-scroll {
+  display: flex;
+  overflow: hidden;
+  height: var(--header-h);
+}
+
+.beat-marker {
+  width: var(--cell-w);
+  min-width: var(--cell-w);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #666;
+  box-sizing: border-box;
+}
+
+.beat-marker.bar {
+  color: #c084fc;
+  font-weight: 700;
+}
+
+.beat-marker.beat {
+  color: #555;
+}
+
+/* Body: note labels + grid */
+.roll-body {
+  display: flex;
+  max-height: 460px;
+  overflow: hidden;
+}
+
+/* Note labels column */
+.note-labels {
+  flex-shrink: 0;
+  width: var(--label-w);
+  overflow-y: scroll;
+  background: #14142a;
+  scrollbar-width: none;
+}
+
+.note-labels::-webkit-scrollbar {
+  display: none;
+}
+
+.note-label {
+  height: var(--cell-h);
+  display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding-bottom: 8px;
-  gap: 3px;
+  padding-right: 6px;
+  font-size: 9px;
+  font-family: ui-monospace, monospace;
+  border-bottom: 1px solid #1e1e36;
+  box-sizing: border-box;
+}
+
+.note-label--natural {
+  color: #ddd;
+  background: #1a1a30;
+}
+
+.note-label--sharp {
+  color: #888;
+  background: #141428;
+}
+
+.note-label--micro {
+  color: #9a80cc;
+  background: #18162e;
+}
+
+/* Grid scroll area */
+.grid-scroll {
+  overflow: auto;
+  flex: 1;
+}
+
+/* Grid rows */
+.grid-row {
+  display: flex;
+  height: var(--cell-h);
+}
+
+.grid-row--natural {
+  background: #1e1e38;
+}
+
+.grid-row--sharp {
+  background: #161630;
+}
+
+.grid-row--micro {
+  background: #1a1834;
+}
+
+/* Grid cells */
+.grid-cell {
+  width: var(--cell-w);
+  min-width: var(--cell-w);
+  height: var(--cell-h);
+  box-sizing: border-box;
+  border-right: 1px solid #222240;
+  border-bottom: 1px solid #1e1e36;
+  cursor: crosshair;
   transition: background 0.05s;
 }
 
-/* Natural keys (C, D, E, F, G, A, B) */
-.key-31--natural {
-  background: linear-gradient(to bottom, #f8f8f8, #e0e0e0);
-  border: 1px solid #bbb;
-  height: 180px;
+.grid-cell.beat-line {
+  border-left: 1px solid #333360;
 }
 
-.key-31--natural.active {
-  background: linear-gradient(to bottom, #c8e0ff, #a0c4ff);
-  border-color: #88b0e0;
+.grid-cell.bar-line {
+  border-left: 2px solid #555580;
 }
 
-.key-31--natural .key-label {
-  font-size: 10px;
-  color: #666;
+.grid-cell:hover {
+  background: rgba(192, 132, 252, 0.12);
 }
 
-.key-31--natural .key-bind {
-  font-size: 11px;
-  font-weight: bold;
-  color: #555;
-  background: #ccc;
-  border-radius: 3px;
-  padding: 1px 4px;
+.grid-cell.on {
+  background: #c084fc;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
 }
 
-/* Sharp/flat keys (C#, Db, D#, Eb, E#, F#, Gb, G#, Ab, A#, Bb, B#) */
-.key-31--sharp {
-  background: linear-gradient(to bottom, #333, #111);
-  border: 1px solid #222;
-  height: 140px;
+.grid-cell.on:hover {
+  background: #d4a0ff;
 }
 
-.key-31--sharp.active {
-  background: linear-gradient(to bottom, #4466aa, #223366);
+.grid-cell.playhead {
+  background: rgba(96, 165, 250, 0.18);
 }
 
-.key-31--sharp .key-label {
-  font-size: 9px;
-  color: #888;
-}
-
-.key-31--sharp .key-bind {
-  font-size: 10px;
-  font-weight: bold;
-  color: #ccc;
-  background: #444;
-  border-radius: 3px;
-  padding: 1px 4px;
-}
-
-/* Microtonal keys (^C, vD, ^D, vE, ^E, ^F, vG, ^G, vA, ^A, vB, ^B) */
-.key-31--micro {
-  background: linear-gradient(to bottom, #5b4a8a, #3a2d5e);
-  border: 1px solid #4a3a7a;
-  height: 160px;
-}
-
-.key-31--micro.active {
-  background: linear-gradient(to bottom, #7b6aaa, #5a4d7e);
-}
-
-.key-31--micro .key-label {
-  font-size: 9px;
-  color: #b8a0e0;
-}
-
-.key-31--micro .key-bind {
-  font-size: 10px;
-  font-weight: bold;
-  color: #c8b8e8;
-  background: #5a4a8a;
-  border-radius: 3px;
-  padding: 1px 4px;
+.grid-cell.on.playhead {
+  background: #60a5fa;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
 }
 
 @media (max-width: 900px) {
   .main-layout {
     flex-direction: column;
-    align-items: center;
+    align-items: stretch;
   }
   .params-panel {
     width: 100%;
     max-width: 500px;
+    align-self: center;
   }
-  .key-31 {
-    width: 24px;
-    min-width: 24px;
+  :root {
+    --cell-w: 18px;
+    --cell-h: 12px;
+    --label-w: 44px;
   }
 }

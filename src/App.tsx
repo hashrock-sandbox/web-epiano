@@ -2,7 +2,6 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { EPianoEngine, DEFAULT_PARAMS, PARAM_DEFS, type EPianoParams, REF_STEP, STEPS_PER_OCTAVE } from './epiano-engine'
 import './App.css'
 
-// 31-EDO note names within one octave
 const NOTE_NAMES_31 = [
   'C', '^C', 'C#', 'Db', 'vD',
   'D', '^D', 'D#', 'Eb', 'vE',
@@ -13,58 +12,62 @@ const NOTE_NAMES_31 = [
   'B', '^B', 'B#',
 ]
 
-// Key type: 'natural' | 'sharp' | 'micro'
-type KeyType = 'natural' | 'sharp' | 'micro'
-
-const KEY_TYPES_31: KeyType[] = [
-  'natural', 'micro', 'sharp', 'sharp', 'micro',   // C .. vD
-  'natural', 'micro', 'sharp', 'sharp', 'micro',   // D .. vE
-  'natural', 'micro', 'sharp',                       // E .. E#
-  'natural', 'micro', 'sharp', 'sharp', 'micro',   // F .. vG
-  'natural', 'micro', 'sharp', 'sharp', 'micro',   // G .. vA
-  'natural', 'micro', 'sharp', 'sharp', 'micro',   // A .. vB
-  'natural', 'micro', 'sharp',                       // B .. B#
+const KEY_TYPES_31: ('natural' | 'sharp' | 'micro')[] = [
+  'natural', 'micro', 'sharp', 'sharp', 'micro',
+  'natural', 'micro', 'sharp', 'sharp', 'micro',
+  'natural', 'micro', 'sharp',
+  'natural', 'micro', 'sharp', 'sharp', 'micro',
+  'natural', 'micro', 'sharp', 'sharp', 'micro',
+  'natural', 'micro', 'sharp', 'sharp', 'micro',
+  'natural', 'micro', 'sharp',
 ]
 
-// Computer keyboard binding for 31 keys (one octave from C4)
-const KEY_BINDINGS = [
-  'z', 'a', 'x', 's', 'c',
-  'v', 'd', 'b', 'f', 'n',
-  'm', 'g', ',',
-  '.', 'h', '/', 'j', 'q',
-  'w', 'k', 'e', 'l', 'r',
-  't', ';', 'y', "'", 'u',
-  'i', 'o', 'p',
-]
+const STEPS_PER_BAR = 16
+const NOTE_LOW = REF_STEP - STEPS_PER_OCTAVE  // C3
+const NOTE_HIGH = REF_STEP + STEPS_PER_OCTAVE - 1 // B4
 
-interface KeyConfig {
-  key: string
-  note: string
-  step: number  // 31-EDO step number
-  keyType: KeyType
+// High to low for display
+const NOTE_RANGE: number[] = []
+for (let n = NOTE_HIGH; n >= NOTE_LOW; n--) NOTE_RANGE.push(n)
+
+function getNoteName(step: number): string {
+  const degree = ((step % STEPS_PER_OCTAVE) + STEPS_PER_OCTAVE) % STEPS_PER_OCTAVE
+  const octave = Math.floor(step / STEPS_PER_OCTAVE) - 1
+  return `${NOTE_NAMES_31[degree]}${octave}`
 }
 
-function buildKeys(): KeyConfig[] {
-  const startStep = REF_STEP  // C4
-  return KEY_BINDINGS.map((key, i) => {
-    const octave = Math.floor((startStep + i) / STEPS_PER_OCTAVE)
-    const degreeInOctave = (startStep + i) % STEPS_PER_OCTAVE
-    const noteName = NOTE_NAMES_31[degreeInOctave]
-    return {
-      key,
-      note: `${noteName}${octave - 4}`,  // relative octave label
-      step: startStep + i,
-      keyType: KEY_TYPES_31[degreeInOctave],
-    }
-  })
+function getNoteType(step: number): 'natural' | 'sharp' | 'micro' {
+  const degree = ((step % STEPS_PER_OCTAVE) + STEPS_PER_OCTAVE) % STEPS_PER_OCTAVE
+  return KEY_TYPES_31[degree]
 }
 
-const KEYS = buildKeys()
+function noteKey(col: number, row: number) {
+  return `${col}-${row}`
+}
 
 function App() {
   const engineRef = useRef<EPianoEngine | null>(null)
-  const [activeKeys, setActiveKeys] = useState<Set<string>>(new Set())
   const [params, setParams] = useState<EPianoParams>({ ...DEFAULT_PARAMS })
+  const [notes, setNotes] = useState<Set<string>>(new Set())
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [currentStep, setCurrentStep] = useState(-1)
+  const [bpm, setBpm] = useState(120)
+  const [numBars, setNumBars] = useState(4)
+
+  const paintModeRef = useRef<'add' | 'remove' | null>(null)
+  const lastCellRef = useRef<string | null>(null)
+  const intervalRef = useRef<number | null>(null)
+  const stepRef = useRef(0)
+  const prevSoundingRef = useRef<Set<number>>(new Set())
+  const notesRef = useRef(notes)
+  notesRef.current = notes
+  const labelsRef = useRef<HTMLDivElement>(null)
+  const gridScrollRef = useRef<HTMLDivElement>(null)
+  const beatMarkersRef = useRef<HTMLDivElement>(null)
+
+  const totalSteps = numBars * STEPS_PER_BAR
+  const totalStepsRef = useRef(totalSteps)
+  totalStepsRef.current = totalSteps
 
   const getEngine = useCallback(() => {
     if (!engineRef.current) {
@@ -73,65 +76,189 @@ function App() {
     return engineRef.current
   }, [])
 
-  const noteOn = useCallback((keyConfig: KeyConfig) => {
-    const engine = getEngine()
-    engine.resume()
-    engine.noteOn(keyConfig.step, 80)
-    setActiveKeys(prev => new Set(prev).add(keyConfig.key))
-  }, [getEngine])
-
-  const noteOff = useCallback((keyConfig: KeyConfig) => {
-    const engine = getEngine()
-    engine.noteOff(keyConfig.step)
-    setActiveKeys(prev => {
-      const next = new Set(prev)
-      next.delete(keyConfig.key)
-      return next
-    })
-  }, [getEngine])
-
   const handleParamChange = useCallback((key: keyof EPianoParams, value: number) => {
     const engine = getEngine()
     engine.setParam(key, value)
     setParams(prev => ({ ...prev, [key]: value }))
   }, [getEngine])
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.repeat) return
-      const keyConfig = KEYS.find(k => k.key === e.key.toLowerCase() || k.key === e.key)
-      if (keyConfig) {
-        e.preventDefault()
-        noteOn(keyConfig)
+  // --- Playback ---
+  const getActiveNotesAtStep = useCallback((step: number): Set<number> => {
+    const result = new Set<number>()
+    for (const key of notesRef.current) {
+      const [s, n] = key.split('-').map(Number)
+      if (s === step) result.add(n)
+    }
+    return result
+  }, [])
+
+  const stopPlayback = useCallback(() => {
+    if (intervalRef.current !== null) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    const engine = getEngine()
+    for (const n of prevSoundingRef.current) {
+      engine.noteOff(n)
+    }
+    prevSoundingRef.current.clear()
+    setIsPlaying(false)
+    setCurrentStep(-1)
+    stepRef.current = 0
+  }, [getEngine])
+
+  const startPlayback = useCallback(() => {
+    const engine = getEngine()
+    engine.resume()
+    stepRef.current = 0
+    setIsPlaying(true)
+    setCurrentStep(0)
+    prevSoundingRef.current.clear()
+
+    const stepMs = (60 / bpm / 4) * 1000 // 16th note duration
+
+    // Play first step immediately
+    const first = getActiveNotesAtStep(0)
+    for (const n of first) engine.noteOn(n, 80)
+    prevSoundingRef.current = first
+
+    intervalRef.current = window.setInterval(() => {
+      stepRef.current = (stepRef.current + 1) % totalStepsRef.current
+      const step = stepRef.current
+      setCurrentStep(step)
+
+      const curr = getActiveNotesAtStep(step)
+      const prev = prevSoundingRef.current
+
+      // Note off for notes no longer active
+      for (const n of prev) {
+        if (!curr.has(n)) engine.noteOff(n)
       }
-    }
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      const keyConfig = KEYS.find(k => k.key === e.key.toLowerCase() || k.key === e.key)
-      if (keyConfig) {
-        noteOff(keyConfig)
+      // Note on for newly active notes
+      for (const n of curr) {
+        if (!prev.has(n)) engine.noteOn(n, 80)
       }
+      prevSoundingRef.current = curr
+    }, stepMs)
+  }, [bpm, getEngine, getActiveNotesAtStep])
+
+  const togglePlayback = useCallback(() => {
+    if (isPlaying) {
+      stopPlayback()
+    } else {
+      startPlayback()
     }
+  }, [isPlaying, stopPlayback, startPlayback])
 
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
-    }
-  }, [noteOn, noteOff])
-
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
+      if (intervalRef.current !== null) clearInterval(intervalRef.current)
       engineRef.current?.dispose()
     }
   }, [])
 
+  // Restart playback when bpm changes during play
+  useEffect(() => {
+    if (isPlaying) {
+      stopPlayback()
+      // Small delay to allow state to settle
+      requestAnimationFrame(() => startPlayback())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bpm])
+
+  // Keyboard shortcut: space = play/stop
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        e.preventDefault()
+        togglePlayback()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [togglePlayback])
+
+  // --- Grid interaction ---
+  const toggleNote = useCallback((col: number, row: number) => {
+    const key = noteKey(col, row)
+    setNotes(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }, [])
+
+  const handleCellPointerDown = useCallback((col: number, row: number) => {
+    const key = noteKey(col, row)
+    const isActive = notes.has(key)
+    paintModeRef.current = isActive ? 'remove' : 'add'
+    lastCellRef.current = key
+    toggleNote(col, row)
+  }, [notes, toggleNote])
+
+  const handleCellPointerEnter = useCallback((col: number, row: number) => {
+    if (paintModeRef.current === null) return
+    const key = noteKey(col, row)
+    if (key === lastCellRef.current) return
+    lastCellRef.current = key
+
+    setNotes(prev => {
+      const next = new Set(prev)
+      if (paintModeRef.current === 'add') {
+        next.add(key)
+      } else {
+        next.delete(key)
+      }
+      return next
+    })
+  }, [])
+
+  const handlePointerUp = useCallback(() => {
+    paintModeRef.current = null
+    lastCellRef.current = null
+  }, [])
+
+  useEffect(() => {
+    window.addEventListener('pointerup', handlePointerUp)
+    return () => window.removeEventListener('pointerup', handlePointerUp)
+  }, [handlePointerUp])
+
+  // Sync scroll between labels/beat-markers and grid
+  const handleGridScroll = useCallback(() => {
+    const grid = gridScrollRef.current
+    if (!grid) return
+    if (labelsRef.current) labelsRef.current.scrollTop = grid.scrollTop
+    if (beatMarkersRef.current) beatMarkersRef.current.scrollLeft = grid.scrollLeft
+  }, [])
+
+  // Trim notes when reducing bars
+  useEffect(() => {
+    setNotes(prev => {
+      const next = new Set<string>()
+      for (const key of prev) {
+        const col = parseInt(key.split('-')[0])
+        if (col < totalSteps) next.add(key)
+      }
+      return next
+    })
+  }, [totalSteps])
+
+  const clearAll = useCallback(() => {
+    if (isPlaying) stopPlayback()
+    setNotes(new Set())
+  }, [isPlaying, stopPlayback])
+
   return (
     <div className="piano-app">
       <h1>Web ePiano <span className="edo-badge">31-EDO</span></h1>
-      <p className="subtitle">31平均律キーボード（Z〜Pキーで1オクターブ演奏）</p>
+      <p className="subtitle">ピアノロールシーケンサー（スペースキーで再生/停止）</p>
+
       <div className="main-layout">
         <div className="params-panel">
           <h2>Parameters</h2>
@@ -150,20 +277,93 @@ function App() {
             </div>
           ))}
         </div>
-        <div className="piano">
-          <div className="keys-container-31">
-            {KEYS.map(k => (
-              <div
-                key={k.key}
-                className={`key-31 key-31--${k.keyType} ${activeKeys.has(k.key) ? 'active' : ''}`}
-                onPointerDown={() => noteOn(k)}
-                onPointerUp={() => noteOff(k)}
-                onPointerLeave={() => noteOff(k)}
-              >
-                <span className="key-label">{k.note}</span>
-                <span className="key-bind">{k.key === ';' ? ';' : k.key === "'" ? "'" : k.key.toUpperCase()}</span>
+
+        <div className="sequencer">
+          {/* Transport */}
+          <div className="transport">
+            <button className="transport-btn" onClick={togglePlayback}>
+              {isPlaying ? '■ Stop' : '▶ Play'}
+            </button>
+            <div className="transport-group">
+              <label>BPM</label>
+              <input
+                type="number"
+                className="bpm-input"
+                min={40}
+                max={300}
+                value={bpm}
+                onChange={e => setBpm(Math.max(40, Math.min(300, parseInt(e.target.value) || 120)))}
+              />
+            </div>
+            <div className="transport-group">
+              <label>Bars</label>
+              <div className="bar-btns">
+                {[1, 2, 3, 4].map(n => (
+                  <button
+                    key={n}
+                    className={`bar-btn ${numBars === n ? 'active' : ''}`}
+                    onClick={() => setNumBars(n)}
+                  >
+                    {n}
+                  </button>
+                ))}
               </div>
-            ))}
+            </div>
+            <button className="transport-btn clear-btn" onClick={clearAll}>Clear</button>
+          </div>
+
+          {/* Piano Roll */}
+          <div className="roll-wrapper">
+            {/* Header row: corner + beat markers */}
+            <div className="roll-header">
+              <div className="corner-cell" />
+              <div className="beat-markers-scroll" ref={beatMarkersRef}>
+                {Array.from({ length: totalSteps }, (_, i) => (
+                  <div
+                    key={i}
+                    className={`beat-marker ${i % STEPS_PER_BAR === 0 ? 'bar' : i % 4 === 0 ? 'beat' : ''}`}
+                  >
+                    {i % STEPS_PER_BAR === 0 ? `${Math.floor(i / STEPS_PER_BAR) + 1}` : i % 4 === 0 ? '·' : ''}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Body row: note labels + grid */}
+            <div className="roll-body">
+              <div className="note-labels" ref={labelsRef}>
+                {NOTE_RANGE.map(n => (
+                  <div key={n} className={`note-label note-label--${getNoteType(n)}`}>
+                    {getNoteName(n)}
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid-scroll" ref={gridScrollRef} onScroll={handleGridScroll}>
+                {NOTE_RANGE.map(noteStep => (
+                  <div key={noteStep} className={`grid-row grid-row--${getNoteType(noteStep)}`}>
+                    {Array.from({ length: totalSteps }, (_, col) => {
+                      const key = noteKey(col, noteStep)
+                      const isActive = notes.has(key)
+                      const isPlayhead = col === currentStep
+                      return (
+                        <div
+                          key={col}
+                          className={
+                            'grid-cell' +
+                            (isActive ? ' on' : '') +
+                            (isPlayhead ? ' playhead' : '') +
+                            (col % STEPS_PER_BAR === 0 ? ' bar-line' : col % 4 === 0 ? ' beat-line' : '')
+                          }
+                          onPointerDown={e => { e.preventDefault(); handleCellPointerDown(col, noteStep) }}
+                          onPointerEnter={() => handleCellPointerEnter(col, noteStep)}
+                        />
+                      )
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </div>
