@@ -2,7 +2,10 @@ import { epianoData } from './epiano-data'
 
 const NVOICES = 32
 const SILENCE = 0.0001
-const SUSTAIN = 128
+const SUSTAIN = -1
+export const STEPS_PER_OCTAVE = 31
+const LN2_OVER_31 = Math.LN2 / STEPS_PER_OCTAVE  // 31-EDO pitch step
+export const REF_STEP = 155  // 31-EDO step for middle C (C4)
 
 interface Voice {
   delta: number
@@ -286,8 +289,16 @@ export class EPianoEngine {
     }
   }
 
+  /** Convert 31-EDO step to approximate MIDI note number */
+  private toMidi(step: number): number {
+    return 60 + (step - REF_STEP) * 12 / STEPS_PER_OCTAVE
+  }
+
   noteOn(note: number, velocity: number) {
     if (!this.ctx) this.start()
+
+    // note is a 31-EDO step number (REF_STEP = middle C)
+    const midiApprox = this.toMidi(note)
 
     if (velocity > 0) {
       let vl = 0
@@ -307,15 +318,17 @@ export class EPianoEngine {
         }
       }
 
-      const k2 = (note - 60) * (note - 60)
-      let l = this.fine + this.random * ((k2 % 13) - 6.5)
+      const k2 = (midiApprox - 60) * (midiApprox - 60)
+      let l = this.fine + this.random * ((Math.round(k2) % 13) - 6.5)
 
       let s = this.size
       let k = 0
-      while (note > (this.kgrp[k].high + s)) k += 3 // find keygroup
+      while (midiApprox > (this.kgrp[k].high + s)) k += 3 // find keygroup
 
-      l += note - this.kgrp[k].root // pitch
-      l = 32000.0 * this.iFs * Math.exp(0.05776226505 * l)
+      // Pitch offset in 31-EDO steps from keygroup root
+      const root31 = (this.kgrp[k].root - 60) * STEPS_PER_OCTAVE / 12 + REF_STEP
+      l += note - root31
+      l = 32000.0 * this.iFs * Math.exp(LN2_OVER_31 * l)
       this.voice[vl].delta = Math.round(65536.0 * l)
       this.voice[vl].frac = 0
 
@@ -330,20 +343,20 @@ export class EPianoEngine {
         Math.pow(0.0078 * velocity, this.velsens)
 
       // High notes quieter
-      if (note > 60) {
-        this.voice[vl].env *= Math.exp(0.01 * (60 - note))
+      if (midiApprox > 60) {
+        this.voice[vl].env *= Math.exp(0.01 * (60 - midiApprox))
       }
 
       // Muffle filter
       l = 50.0 + this.params.modulation * this.params.modulation * this.muff +
         this.muffvel * (velocity - 64)
-      if (l < (55.0 + 0.4 * note)) l = 55.0 + 0.4 * note
+      if (l < (55.0 + 0.4 * midiApprox)) l = 55.0 + 0.4 * midiApprox
       if (l > 210.0) l = 210.0
       this.voice[vl].ff = l * l * this.iFs
 
       // Stereo panning based on note position
       this.voice[vl].note = note
-      let n = note
+      let n = midiApprox
       if (n < 12) n = 12
       if (n > 108) n = 108
       const vol = this.volume
@@ -360,8 +373,9 @@ export class EPianoEngine {
       for (let v = 0; v < NVOICES; v++) {
         if (this.voice[v].note === note) {
           if (this.sustain === 0) {
+            const m = this.toMidi(note)
             this.voice[v].dec = Math.exp(
-              -this.iFs * Math.exp(6.0 + 0.01 * note - 5.0 * this.params.envelopeRelease)
+              -this.iFs * Math.exp(6.0 + 0.01 * m - 5.0 * this.params.envelopeRelease)
             )
           } else {
             this.voice[v].note = SUSTAIN

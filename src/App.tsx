@@ -1,33 +1,65 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { EPianoEngine, DEFAULT_PARAMS, PARAM_DEFS, type EPianoParams } from './epiano-engine'
+import { EPianoEngine, DEFAULT_PARAMS, PARAM_DEFS, type EPianoParams, REF_STEP, STEPS_PER_OCTAVE } from './epiano-engine'
 import './App.css'
+
+// 31-EDO note names within one octave
+const NOTE_NAMES_31 = [
+  'C', '^C', 'C#', 'Db', 'vD',
+  'D', '^D', 'D#', 'Eb', 'vE',
+  'E', '^E', 'E#',
+  'F', '^F', 'F#', 'Gb', 'vG',
+  'G', '^G', 'G#', 'Ab', 'vA',
+  'A', '^A', 'A#', 'Bb', 'vB',
+  'B', '^B', 'B#',
+]
+
+// Key type: 'natural' | 'sharp' | 'micro'
+type KeyType = 'natural' | 'sharp' | 'micro'
+
+const KEY_TYPES_31: KeyType[] = [
+  'natural', 'micro', 'sharp', 'sharp', 'micro',   // C .. vD
+  'natural', 'micro', 'sharp', 'sharp', 'micro',   // D .. vE
+  'natural', 'micro', 'sharp',                       // E .. E#
+  'natural', 'micro', 'sharp', 'sharp', 'micro',   // F .. vG
+  'natural', 'micro', 'sharp', 'sharp', 'micro',   // G .. vA
+  'natural', 'micro', 'sharp', 'sharp', 'micro',   // A .. vB
+  'natural', 'micro', 'sharp',                       // B .. B#
+]
+
+// Computer keyboard binding for 31 keys (one octave from C4)
+const KEY_BINDINGS = [
+  'z', 'a', 'x', 's', 'c',
+  'v', 'd', 'b', 'f', 'n',
+  'm', 'g', ',',
+  '.', 'h', '/', 'j', 'q',
+  'w', 'k', 'e', 'l', 'r',
+  't', ';', 'y', "'", 'u',
+  'i', 'o', 'p',
+]
 
 interface KeyConfig {
   key: string
   note: string
-  midi: number
-  isBlack: boolean
+  step: number  // 31-EDO step number
+  keyType: KeyType
 }
 
-const KEYS: KeyConfig[] = [
-  { key: 'a', note: 'C4', midi: 60, isBlack: false },
-  { key: 'w', note: 'C#4', midi: 61, isBlack: true },
-  { key: 's', note: 'D4', midi: 62, isBlack: false },
-  { key: 'e', note: 'D#4', midi: 63, isBlack: true },
-  { key: 'd', note: 'E4', midi: 64, isBlack: false },
-  { key: 'f', note: 'F4', midi: 65, isBlack: false },
-  { key: 't', note: 'F#4', midi: 66, isBlack: true },
-  { key: 'g', note: 'G4', midi: 67, isBlack: false },
-  { key: 'y', note: 'G#4', midi: 68, isBlack: true },
-  { key: 'h', note: 'A4', midi: 69, isBlack: false },
-  { key: 'u', note: 'A#4', midi: 70, isBlack: true },
-  { key: 'j', note: 'B4', midi: 71, isBlack: false },
-  { key: 'k', note: 'C5', midi: 72, isBlack: false },
-  { key: 'o', note: 'C#5', midi: 73, isBlack: true },
-  { key: 'l', note: 'D5', midi: 74, isBlack: false },
-  { key: 'p', note: 'D#5', midi: 75, isBlack: true },
-  { key: ';', note: 'E5', midi: 76, isBlack: false },
-]
+function buildKeys(): KeyConfig[] {
+  const startStep = REF_STEP  // C4
+  return KEY_BINDINGS.map((key, i) => {
+    const octave = Math.floor((startStep + i) / STEPS_PER_OCTAVE)
+    const degreeInOctave = (startStep + i) % STEPS_PER_OCTAVE
+    const noteName = NOTE_NAMES_31[degreeInOctave]
+    return {
+      key,
+      note: `${noteName}${octave - 4}`,  // relative octave label
+      step: startStep + i,
+      keyType: KEY_TYPES_31[degreeInOctave],
+    }
+  })
+}
+
+const KEYS = buildKeys()
 
 function App() {
   const engineRef = useRef<EPianoEngine | null>(null)
@@ -44,13 +76,13 @@ function App() {
   const noteOn = useCallback((keyConfig: KeyConfig) => {
     const engine = getEngine()
     engine.resume()
-    engine.noteOn(keyConfig.midi, 80)
+    engine.noteOn(keyConfig.step, 80)
     setActiveKeys(prev => new Set(prev).add(keyConfig.key))
   }, [getEngine])
 
   const noteOff = useCallback((keyConfig: KeyConfig) => {
     const engine = getEngine()
-    engine.noteOff(keyConfig.midi)
+    engine.noteOff(keyConfig.step)
     setActiveKeys(prev => {
       const next = new Set(prev)
       next.delete(keyConfig.key)
@@ -67,7 +99,7 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return
-      const keyConfig = KEYS.find(k => k.key === e.key.toLowerCase())
+      const keyConfig = KEYS.find(k => k.key === e.key.toLowerCase() || k.key === e.key)
       if (keyConfig) {
         e.preventDefault()
         noteOn(keyConfig)
@@ -75,7 +107,7 @@ function App() {
     }
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      const keyConfig = KEYS.find(k => k.key === e.key.toLowerCase())
+      const keyConfig = KEYS.find(k => k.key === e.key.toLowerCase() || k.key === e.key)
       if (keyConfig) {
         noteOff(keyConfig)
       }
@@ -96,19 +128,10 @@ function App() {
     }
   }, [])
 
-  const whiteKeys = KEYS.filter(k => !k.isBlack)
-  const blackKeys = KEYS.filter(k => k.isBlack)
-
-  const getBlackKeyLeft = (blackKey: KeyConfig) => {
-    const blackIndex = KEYS.indexOf(blackKey)
-    const whiteCount = KEYS.slice(0, blackIndex).filter(k => !k.isBlack).length
-    return whiteCount * 60 - 18
-  }
-
   return (
     <div className="piano-app">
-      <h1>Web ePiano</h1>
-      <p className="subtitle">キーボードで演奏できます（A〜;キー）</p>
+      <h1>Web ePiano <span className="edo-badge">31-EDO</span></h1>
+      <p className="subtitle">31平均律キーボード（Z〜Pキーで1オクターブ演奏）</p>
       <div className="main-layout">
         <div className="params-panel">
           <h2>Parameters</h2>
@@ -128,30 +151,17 @@ function App() {
           ))}
         </div>
         <div className="piano">
-          <div className="keys-container">
-            {whiteKeys.map(k => (
+          <div className="keys-container-31">
+            {KEYS.map(k => (
               <div
                 key={k.key}
-                className={`white-key ${activeKeys.has(k.key) ? 'active' : ''}`}
+                className={`key-31 key-31--${k.keyType} ${activeKeys.has(k.key) ? 'active' : ''}`}
                 onPointerDown={() => noteOn(k)}
                 onPointerUp={() => noteOff(k)}
                 onPointerLeave={() => noteOff(k)}
               >
                 <span className="key-label">{k.note}</span>
-                <span className="key-bind">{k.key.toUpperCase()}</span>
-              </div>
-            ))}
-            {blackKeys.map(k => (
-              <div
-                key={k.key}
-                className={`black-key ${activeKeys.has(k.key) ? 'active' : ''}`}
-                style={{ left: getBlackKeyLeft(k) }}
-                onPointerDown={() => noteOn(k)}
-                onPointerUp={() => noteOff(k)}
-                onPointerLeave={() => noteOff(k)}
-              >
-                <span className="key-label">{k.note}</span>
-                <span className="key-bind">{k.key.toUpperCase()}</span>
+                <span className="key-bind">{k.key === ';' ? ';' : k.key === "'" ? "'" : k.key.toUpperCase()}</span>
               </div>
             ))}
           </div>
