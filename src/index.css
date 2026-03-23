@@ -1,0 +1,20 @@
+:root {
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: light dark;
+  font-family: var(--sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  background: #0f0f1a;
+  color: #e0e0e0;
+}
+
+#root {
+  width: 100%;
+  max-width: 100%;
+}
