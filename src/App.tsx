@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { EPianoEngine, DEFAULT_PARAMS, PARAM_DEFS, type EPianoParams, REF_STEP, STEPS_PER_OCTAVE } from './epiano-engine'
 import './App.css'
 
@@ -23,12 +23,26 @@ const KEY_TYPES_31: ('natural' | 'sharp' | 'micro')[] = [
 ]
 
 const STEPS_PER_BAR = 16
-const NOTE_LOW = REF_STEP - STEPS_PER_OCTAVE  // C3
-const NOTE_HIGH = REF_STEP + STEPS_PER_OCTAVE - 1 // B4
+const NOTE_LOW = REF_STEP - STEPS_PER_OCTAVE
+const NOTE_HIGH = REF_STEP + STEPS_PER_OCTAVE - 1
 
-// High to low for display
 const NOTE_RANGE: number[] = []
 for (let n = NOTE_HIGH; n >= NOTE_LOW; n--) NOTE_RANGE.push(n)
+
+const NOTE_LENGTH_OPTIONS = [
+  { label: '1/16', steps: 1 },
+  { label: '1/8', steps: 2 },
+  { label: '1/4', steps: 4 },
+  { label: '1/2', steps: 8 },
+  { label: '1', steps: 16 },
+]
+
+interface SeqNote {
+  id: number
+  col: number
+  row: number
+  len: number
+}
 
 function getNoteName(step: number): string {
   const degree = ((step % STEPS_PER_OCTAVE) + STEPS_PER_OCTAVE) % STEPS_PER_OCTAVE
@@ -41,21 +55,17 @@ function getNoteType(step: number): 'natural' | 'sharp' | 'micro' {
   return KEY_TYPES_31[degree]
 }
 
-function noteKey(col: number, row: number) {
-  return `${col}-${row}`
-}
-
 function App() {
   const engineRef = useRef<EPianoEngine | null>(null)
   const [params, setParams] = useState<EPianoParams>({ ...DEFAULT_PARAMS })
-  const [notes, setNotes] = useState<Set<string>>(new Set())
+  const [notes, setNotes] = useState<SeqNote[]>([])
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentStep, setCurrentStep] = useState(-1)
   const [bpm, setBpm] = useState(120)
   const [numBars, setNumBars] = useState(4)
+  const [selectedLength, setSelectedLength] = useState(4)
 
-  const paintModeRef = useRef<'add' | 'remove' | null>(null)
-  const lastCellRef = useRef<string | null>(null)
+  const nextIdRef = useRef(1)
   const intervalRef = useRef<number | null>(null)
   const stepRef = useRef(0)
   const prevSoundingRef = useRef<Set<number>>(new Set())
@@ -64,6 +74,15 @@ function App() {
   const labelsRef = useRef<HTMLDivElement>(null)
   const gridScrollRef = useRef<HTMLDivElement>(null)
   const beatMarkersRef = useRef<HTMLDivElement>(null)
+
+  const dragRef = useRef<{
+    noteId: number
+    row: number
+    startCol: number
+    cellWidth: number
+    gridLeft: number
+    scrollLeft: number
+  } | null>(null)
 
   const totalSteps = numBars * STEPS_PER_BAR
   const totalStepsRef = useRef(totalSteps)
@@ -82,12 +101,40 @@ function App() {
     setParams(prev => ({ ...prev, [key]: value }))
   }, [getEngine])
 
+  // --- Note lookup helpers ---
+  const findNoteAt = useCallback((col: number, row: number): SeqNote | undefined => {
+    // Search in reverse so latest note is found first
+    for (let i = notes.length - 1; i >= 0; i--) {
+      const n = notes[i]
+      if (n.row === row && col >= n.col && col < n.col + n.len) return n
+    }
+    return undefined
+  }, [notes])
+
+  // Notes indexed by row for rendering
+  const notesByRow = useMemo(() => {
+    const map = new Map<number, SeqNote[]>()
+    for (const note of notes) {
+      let arr = map.get(note.row)
+      if (!arr) { arr = []; map.set(note.row, arr) }
+      arr.push(note)
+    }
+    return map
+  }, [notes])
+
   // --- Playback ---
-  const getActiveNotesAtStep = useCallback((step: number): Set<number> => {
+  const getSoundingPitches = useCallback((step: number): Set<number> => {
     const result = new Set<number>()
-    for (const key of notesRef.current) {
-      const [s, n] = key.split('-').map(Number)
-      if (s === step) result.add(n)
+    for (const n of notesRef.current) {
+      if (step >= n.col && step < n.col + n.len) result.add(n.row)
+    }
+    return result
+  }, [])
+
+  const getStartingPitches = useCallback((step: number): Set<number> => {
+    const result = new Set<number>()
+    for (const n of notesRef.current) {
+      if (n.col === step) result.add(n.row)
     }
     return result
   }, [])
@@ -98,9 +145,7 @@ function App() {
       intervalRef.current = null
     }
     const engine = getEngine()
-    for (const n of prevSoundingRef.current) {
-      engine.noteOff(n)
-    }
+    for (const p of prevSoundingRef.current) engine.noteOff(p)
     prevSoundingRef.current.clear()
     setIsPlaying(false)
     setCurrentStep(-1)
@@ -115,42 +160,40 @@ function App() {
     setCurrentStep(0)
     prevSoundingRef.current.clear()
 
-    const stepMs = (60 / bpm / 4) * 1000 // 16th note duration
+    const stepMs = (60 / bpm / 4) * 1000
 
-    // Play first step immediately
-    const first = getActiveNotesAtStep(0)
-    for (const n of first) engine.noteOn(n, 80)
-    prevSoundingRef.current = first
+    // Play first step
+    const curr = getSoundingPitches(0)
+    const starting = getStartingPitches(0)
+    for (const p of starting) engine.noteOn(p, 80)
+    prevSoundingRef.current = curr
 
     intervalRef.current = window.setInterval(() => {
       stepRef.current = (stepRef.current + 1) % totalStepsRef.current
       const step = stepRef.current
       setCurrentStep(step)
 
-      const curr = getActiveNotesAtStep(step)
+      const curr = getSoundingPitches(step)
+      const starting = getStartingPitches(step)
       const prev = prevSoundingRef.current
 
-      // Note off for notes no longer active
-      for (const n of prev) {
-        if (!curr.has(n)) engine.noteOff(n)
+      // noteOff: stopped or retriggering
+      for (const p of prev) {
+        if (!curr.has(p) || starting.has(p)) engine.noteOff(p)
       }
-      // Note on for newly active notes
-      for (const n of curr) {
-        if (!prev.has(n)) engine.noteOn(n, 80)
+      // noteOn: newly sounding or retriggering
+      for (const p of curr) {
+        if (!prev.has(p) || starting.has(p)) engine.noteOn(p, 80)
       }
       prevSoundingRef.current = curr
     }, stepMs)
-  }, [bpm, getEngine, getActiveNotesAtStep])
+  }, [bpm, getEngine, getSoundingPitches, getStartingPitches])
 
   const togglePlayback = useCallback(() => {
-    if (isPlaying) {
-      stopPlayback()
-    } else {
-      startPlayback()
-    }
+    if (isPlaying) stopPlayback()
+    else startPlayback()
   }, [isPlaying, stopPlayback, startPlayback])
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (intervalRef.current !== null) clearInterval(intervalRef.current)
@@ -158,17 +201,14 @@ function App() {
     }
   }, [])
 
-  // Restart playback when bpm changes during play
   useEffect(() => {
     if (isPlaying) {
       stopPlayback()
-      // Small delay to allow state to settle
       requestAnimationFrame(() => startPlayback())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bpm])
 
-  // Keyboard shortcut: space = play/stop
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
@@ -181,55 +221,78 @@ function App() {
   }, [togglePlayback])
 
   // --- Grid interaction ---
-  const toggleNote = useCallback((col: number, row: number) => {
-    const key = noteKey(col, row)
-    setNotes(prev => {
-      const next = new Set(prev)
-      if (next.has(key)) {
-        next.delete(key)
-      } else {
-        next.add(key)
+  const handleCellPointerDown = useCallback((col: number, row: number, e: React.PointerEvent) => {
+    e.preventDefault()
+
+    const existing = findNoteAt(col, row)
+    if (existing) {
+      // Delete existing note
+      setNotes(prev => prev.filter(n => n.id !== existing.id))
+      return
+    }
+
+    // Create new note
+    const engine = getEngine()
+    engine.resume()
+    engine.noteOn(row, 80)
+
+    const id = nextIdRef.current++
+    const len = Math.min(selectedLength, totalSteps - col)
+    const newNote: SeqNote = { id, col, row, len }
+    setNotes(prev => [...prev, newNote])
+
+    // Start drag for length adjustment
+    const gridEl = gridScrollRef.current
+    if (gridEl) {
+      const cell = e.currentTarget as HTMLElement
+      const cellRect = cell.getBoundingClientRect()
+      const cellWidth = cellRect.width
+      const gridRect = gridEl.getBoundingClientRect()
+      dragRef.current = {
+        noteId: id,
+        row,
+        startCol: col,
+        cellWidth,
+        gridLeft: gridRect.left,
+        scrollLeft: gridEl.scrollLeft,
       }
-      return next
-    })
-  }, [])
+    }
+  }, [findNoteAt, getEngine, selectedLength, totalSteps])
 
-  const handleCellPointerDown = useCallback((col: number, row: number) => {
-    const key = noteKey(col, row)
-    const isActive = notes.has(key)
-    paintModeRef.current = isActive ? 'remove' : 'add'
-    lastCellRef.current = key
-    toggleNote(col, row)
-  }, [notes, toggleNote])
+  const handlePointerMove = useCallback((e: PointerEvent) => {
+    const drag = dragRef.current
+    if (!drag) return
 
-  const handleCellPointerEnter = useCallback((col: number, row: number) => {
-    if (paintModeRef.current === null) return
-    const key = noteKey(col, row)
-    if (key === lastCellRef.current) return
-    lastCellRef.current = key
+    const gridEl = gridScrollRef.current
+    if (!gridEl) return
 
-    setNotes(prev => {
-      const next = new Set(prev)
-      if (paintModeRef.current === 'add') {
-        next.add(key)
-      } else {
-        next.delete(key)
-      }
-      return next
-    })
+    const x = e.clientX - drag.gridLeft + gridEl.scrollLeft
+    const col = Math.floor(x / drag.cellWidth)
+    const newLen = Math.max(1, Math.min(col - drag.startCol + 1, totalStepsRef.current - drag.startCol))
+
+    setNotes(prev => prev.map(n =>
+      n.id === drag.noteId ? { ...n, len: newLen } : n
+    ))
   }, [])
 
   const handlePointerUp = useCallback(() => {
-    paintModeRef.current = null
-    lastCellRef.current = null
-  }, [])
+    if (dragRef.current) {
+      const engine = getEngine()
+      engine.noteOff(dragRef.current.row)
+      dragRef.current = null
+    }
+  }, [getEngine])
 
   useEffect(() => {
+    window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
-    return () => window.removeEventListener('pointerup', handlePointerUp)
-  }, [handlePointerUp])
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [handlePointerMove, handlePointerUp])
 
-  // Sync scroll between labels/beat-markers and grid
+  // Sync scroll
   const handleGridScroll = useCallback(() => {
     const grid = gridScrollRef.current
     if (!grid) return
@@ -240,18 +303,20 @@ function App() {
   // Trim notes when reducing bars
   useEffect(() => {
     setNotes(prev => {
-      const next = new Set<string>()
-      for (const key of prev) {
-        const col = parseInt(key.split('-')[0])
-        if (col < totalSteps) next.add(key)
-      }
-      return next
+      const trimmed = prev
+        .map(n => {
+          if (n.col >= totalSteps) return null
+          if (n.col + n.len > totalSteps) return { ...n, len: totalSteps - n.col }
+          return n
+        })
+        .filter((n): n is SeqNote => n !== null)
+      return trimmed
     })
   }, [totalSteps])
 
   const clearAll = useCallback(() => {
     if (isPlaying) stopPlayback()
-    setNotes(new Set())
+    setNotes([])
   }, [isPlaying, stopPlayback])
 
   return (
@@ -309,12 +374,25 @@ function App() {
                 ))}
               </div>
             </div>
+            <div className="transport-group">
+              <label>Length</label>
+              <div className="len-btns">
+                {NOTE_LENGTH_OPTIONS.map(opt => (
+                  <button
+                    key={opt.steps}
+                    className={`len-btn ${selectedLength === opt.steps ? 'active' : ''}`}
+                    onClick={() => setSelectedLength(opt.steps)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <button className="transport-btn clear-btn" onClick={clearAll}>Clear</button>
           </div>
 
           {/* Piano Roll */}
           <div className="roll-wrapper">
-            {/* Header row: corner + beat markers */}
             <div className="roll-header">
               <div className="corner-cell" />
               <div className="beat-markers-scroll" ref={beatMarkersRef}>
@@ -329,7 +407,6 @@ function App() {
               </div>
             </div>
 
-            {/* Body row: note labels + grid */}
             <div className="roll-body">
               <div className="note-labels" ref={labelsRef}>
                 {NOTE_RANGE.map(n => (
@@ -340,28 +417,39 @@ function App() {
               </div>
 
               <div className="grid-scroll" ref={gridScrollRef} onScroll={handleGridScroll}>
-                {NOTE_RANGE.map(noteStep => (
-                  <div key={noteStep} className={`grid-row grid-row--${getNoteType(noteStep)}`}>
-                    {Array.from({ length: totalSteps }, (_, col) => {
-                      const key = noteKey(col, noteStep)
-                      const isActive = notes.has(key)
-                      const isPlayhead = col === currentStep
-                      return (
+                {NOTE_RANGE.map(noteStep => {
+                  const rowNotes = notesByRow.get(noteStep) || []
+                  return (
+                    <div key={noteStep} className={`grid-row grid-row--${getNoteType(noteStep)}`}>
+                      {/* Background cells (interaction layer) */}
+                      {Array.from({ length: totalSteps }, (_, col) => (
                         <div
                           key={col}
                           className={
                             'grid-cell' +
-                            (isActive ? ' on' : '') +
-                            (isPlayhead ? ' playhead' : '') +
+                            (col === currentStep ? ' playhead' : '') +
                             (col % STEPS_PER_BAR === 0 ? ' bar-line' : col % 4 === 0 ? ' beat-line' : '')
                           }
-                          onPointerDown={e => { e.preventDefault(); handleCellPointerDown(col, noteStep) }}
-                          onPointerEnter={() => handleCellPointerEnter(col, noteStep)}
+                          onPointerDown={e => handleCellPointerDown(col, noteStep, e)}
                         />
-                      )
-                    })}
-                  </div>
-                ))}
+                      ))}
+                      {/* Note blocks (visual overlay) */}
+                      {rowNotes.map(note => (
+                        <div
+                          key={note.id}
+                          className={
+                            'note-block' +
+                            (currentStep >= note.col && currentStep < note.col + note.len ? ' sounding' : '')
+                          }
+                          style={{
+                            left: `calc(${note.col} * var(--cell-w))`,
+                            width: `calc(${note.len} * var(--cell-w) - 1px)`,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </div>
